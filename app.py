@@ -1,3 +1,4 @@
+# ------------------- Imports -------------------
 import streamlit as st
 import torch
 import shap
@@ -13,63 +14,63 @@ import uuid
 import re
 from opt_tcn_model import TCNWithAttention
 
-# Paths
+# ------------------- Paths & Constants -------------------
 MODEL_PATH = "tcn_best_model.pt"
 TOKENIZER_PATH = "char2idx.pkl"
+DB_PATH = "phishing_logs.db"
 MAX_LEN = 200
 MAX_URLS = 1000
-DB_PATH = "phishing_logs.db"
 
-# Assign Session ID
+# ------------------- Session ID -------------------
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = str(uuid.uuid4())
 
-# Sanitize input
+# ------------------- Sanitize -------------------
 def sanitize_url(url):
     return re.sub(r'[\'\";<>{}]', '', url.strip())
 
-# Initialize DB
+# ------------------- DB Setup -------------------
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            session_id TEXT,
-            url TEXT,
-            prediction TEXT,
-            confidence REAL,
-            feedback TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    if not os.path.exists(DB_PATH):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                session_id TEXT,
+                url TEXT,
+                prediction TEXT,
+                confidence REAL,
+                feedback TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
 
 def log_to_db(url, prediction, confidence, feedback=""):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO logs (timestamp, session_id, url, prediction, confidence, feedback)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        st.session_state["session_id"],
-        url,
-        prediction,
-        confidence,
-        feedback
-    ))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO logs (timestamp, session_id, url, prediction, confidence, feedback)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            st.session_state["session_id"],
+            url,
+            prediction,
+            confidence,
+            feedback
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        st.error(f"Failed to write to database: {e}")
 
 init_db()
 
-# Load tokenizer
-if not os.path.exists(TOKENIZER_PATH):
-    st.error(f"Tokenizer file not found at: {TOKENIZER_PATH}")
-    st.stop()
-
+# ------------------- Tokenizer -------------------
 with open(TOKENIZER_PATH, "rb") as f:
     char2idx = pickle.load(f)
 
@@ -87,16 +88,16 @@ class CharTokenizer:
     def vocab_size(self):
         return len(self.char2idx) + 1
 
-tokenizer = CharTokenizer(char2idx=char2idx, max_length=MAX_LEN)
+tokenizer = CharTokenizer(char2idx, MAX_LEN)
 
-# Load model
+# ------------------- Load Model -------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = TCNWithAttention(vocab_size=tokenizer.vocab_size)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 model.to(device)
 model.eval()
 
-# SHAP
+# ------------------- SHAP -------------------
 class WrappedModel(torch.nn.Module):
     def __init__(self, base_model):
         super().__init__()
@@ -146,7 +147,7 @@ st.markdown("""
 url_input = st.text_input("Enter a URL for prediction", "")
 uploaded_file = st.file_uploader("Or upload a CSV/TXT file with URLs", type=['csv', 'txt'])
 
-# Single Prediction
+# ------------------- Single Prediction -------------------
 if st.button("Predict for Single URL") and url_input:
     with st.spinner("Analyzing... please wait"):
         sanitized = sanitize_url(url_input)
@@ -166,7 +167,7 @@ if st.button("Predict for Single URL") and url_input:
             log_to_db(sanitized, pred, conf, feedback="no")
             st.info("Thanks! We'll keep improving.")
 
-# Batch Prediction
+# ------------------- Batch Prediction -------------------
 if uploaded_file is not None:
     if st.button("Predict for All URLs in File"):
         with st.spinner("Processing file... please wait"):
@@ -189,18 +190,16 @@ if uploaded_file is not None:
 
             results_df = pd.DataFrame(results, columns=["URL", "Prediction", "Confidence"])
 
-            def highlight_prediction(row):
+            def highlight(row):
                 if row["Prediction"] == "Phishing":
                     return ['background-color: #ffe6e6; color: red'] * len(row)
-                elif row["Prediction"] == "Legitimate":
-                    return ['background-color: #e6ffe6; color: green'] * len(row)
-                return [''] * len(row)
+                return ['background-color: #e6ffe6; color: green'] * len(row)
 
-            st.dataframe(results_df.style.apply(highlight_prediction, axis=1))
+            st.dataframe(results_df.style.apply(highlight, axis=1))
             csv = results_df.to_csv(index=False).encode("utf-8")
             st.download_button("Download Prediction Results CSV", csv, "predictions.csv", "text/csv")
 
-# Log Viewer
+# ------------------- View Logs -------------------
 if st.checkbox("Show Logs"):
     conn = sqlite3.connect(DB_PATH)
     df_logs = pd.read_sql("SELECT * FROM logs ORDER BY timestamp DESC", conn)
