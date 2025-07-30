@@ -11,10 +11,14 @@ from datetime import datetime
 from opt_tcn_model import TCNWithAttention
 
 # Paths
-MODEL_PATH = r"C:\Users\drmar\Documents\Capstone Project\TCN\tcn_best_model.pt"
-TOKENIZER_PATH = r"C:\Users\drmar\Documents\Capstone Project\TCN\char2idx.pkl"
+MODEL_PATH = "tcn_best_model.pt"
+TOKENIZER_PATH = "char2idx.pkl"
 MAX_LEN = 200
 LOG_PATH = "streamlit_log.csv"
+
+if not os.path.exists(TOKENIZER_PATH):
+    st.error(f"Tokenizer file not found at: {TOKENIZER_PATH}")
+    st.stop()
 
 # Load tokenizer
 with open(TOKENIZER_PATH, "rb") as f:
