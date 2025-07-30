@@ -1,3 +1,4 @@
+# Re-create the corrected app.py file after kernel reset
 # ------------------- Imports -------------------
 import streamlit as st
 import torch
@@ -28,7 +29,7 @@ if "session_id" not in st.session_state:
 
 # ------------------- Sanitize -------------------
 def sanitize_url(url):
-    return re.sub(r'[\'\";<>{}]', '', url.strip())
+        return re.sub(r'[\'\";<>{}]', '', url.strip())
 
 # ------------------- DB Setup -------------------
 def init_db():
@@ -129,7 +130,7 @@ def explain_url(url):
     plt.xticks(range(len(characters)), characters)
     plt.xlabel("Character")
     plt.ylabel("SHAP Value")
-    plt.title(f"SHAP for: {url}\nPrediction: {prediction} ({confidence:.4f})")
+    plt.title(f"SHAP for: {url}\\nPrediction: {prediction} ({confidence:.4f})")
     buf = BytesIO()
     plt.savefig(buf, format="png", bbox_inches="tight")
     buf.seek(0)
@@ -159,14 +160,12 @@ if st.button("Predict for Single URL") and url_input:
     st.download_button("Download SHAP Plot", data=plot_buf, file_name=f"shap_{sanitized.replace('/', '_')}.png", mime="image/png")
 
     st.markdown("#### Was this prediction helpful or accurate?")
-    
-
-col1, col2 = st.columns(2)
-with col1:
+    col1, col2 = st.columns(2)
+    with col1:
         if st.button("👍 Yes"):
             log_to_db(sanitized, pred, conf, feedback="yes")
             st.success("Thank you for your feedback!")
-with col2:
+    with col2:
         if st.button("👎 No"):
             log_to_db(sanitized, pred, conf, feedback="no")
             st.info("Thanks! We'll keep improving.")
@@ -209,3 +208,4 @@ if st.checkbox("Show Logs"):
     df_logs = pd.read_sql("SELECT * FROM logs ORDER BY timestamp DESC", conn)
     conn.close()
     st.dataframe(df_logs)
+
