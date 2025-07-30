@@ -8,19 +8,30 @@ import pandas as pd
 import os
 from io import BytesIO
 from datetime import datetime
+import uuid
+import re
 from opt_tcn_model import TCNWithAttention
 
 # Paths
 MODEL_PATH = "tcn_best_model.pt"
 TOKENIZER_PATH = "char2idx.pkl"
-MAX_LEN = 200
 LOG_PATH = "streamlit_log.csv"
+MAX_LEN = 200
+MAX_URLS = 1000
 
+# Assign Session ID
+if "session_id" not in st.session_state:
+    st.session_state["session_id"] = str(uuid.uuid4())
+
+# Sanitize input
+def sanitize_url(url):
+    return re.sub(r'[\'\";<>{}]', '', url.strip())
+
+# Load tokenizer
 if not os.path.exists(TOKENIZER_PATH):
     st.error(f"Tokenizer file not found at: {TOKENIZER_PATH}")
     st.stop()
 
-# Load tokenizer
 with open(TOKENIZER_PATH, "rb") as f:
     char2idx = pickle.load(f)
 
@@ -32,11 +43,7 @@ class CharTokenizer:
 
     def encode(self, url):
         encoded = [self.char2idx.get(c, self.pad_idx) for c in url]
-        if len(encoded) < self.max_length:
-            encoded += [self.pad_idx] * (self.max_length - len(encoded))
-        else:
-            encoded = encoded[:self.max_length]
-        return encoded
+        return (encoded + [self.pad_idx] * (self.max_length - len(encoded)))[:self.max_length]
 
     @property
     def vocab_size(self):
@@ -51,6 +58,7 @@ model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 model.to(device)
 model.eval()
 
+# SHAP
 class WrappedModel(torch.nn.Module):
     def __init__(self, base_model):
         super().__init__()
@@ -65,38 +73,32 @@ class WrappedModel(torch.nn.Module):
 wrapped_model = WrappedModel(model)
 explainer = shap.Explainer(wrapped_model, shap.maskers.Independent(np.zeros((1, MAX_LEN), dtype=np.int64)))
 
-# SHAP Explanation Function
 def explain_url(url):
     encoded = tokenizer.encode(url)
     input_tensor = torch.tensor(encoded, dtype=torch.long).unsqueeze(0).to(device)
-
     with torch.no_grad():
         logits, _ = model(input_tensor)
         confidence = torch.sigmoid(logits).item()
         prediction = "Phishing" if confidence > 0.5 else "Legitimate"
-
     shap_values = explainer(input_tensor.cpu().numpy())
     values = shap_values.values[0]
     characters = list(url)
     colors = ['red' if v > 0 else 'blue' for v in values[:len(characters)]]
-
     plt.figure(figsize=(14, 5))
     plt.bar(range(len(characters)), values[:len(characters)], color=colors)
     plt.xticks(range(len(characters)), characters)
     plt.xlabel("Character")
     plt.ylabel("SHAP Value")
     plt.title(f"SHAP for: {url}\nPrediction: {prediction} ({confidence:.4f})")
-
     buf = BytesIO()
     plt.savefig(buf, format="png", bbox_inches="tight")
     buf.seek(0)
-
     return prediction, confidence, buf
 
-# Logging
 def log_result(url, prediction, confidence):
     entry = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "session_id": st.session_state["session_id"],
         "url": url,
         "prediction": prediction,
         "confidence": confidence
@@ -106,49 +108,66 @@ def log_result(url, prediction, confidence):
     else:
         pd.concat([pd.read_csv(LOG_PATH), pd.DataFrame([entry])], ignore_index=True).to_csv(LOG_PATH, index=False)
 
-# --------------- Streamlit UI ----------------
+# ------------------- Streamlit UI -------------------
 st.set_page_config(page_title="TCN Phishing Detector", layout="centered")
-st.title(" Real-Time Phishing URL Detector (TCN + SHAP)")
+st.title("Real-Time Phishing Detector for Brand Protection")
 
-# URL Input
-url_input = st.text_input(" Enter a URL for prediction", "")
+st.markdown("""
+<div style='background-color:#fff3cd; padding:10px; border-left:5px solid #ffc107;'>
+    <b>Disclaimer:</b> This tool is for <i>educational and demonstration purposes only</i>.
+</div>
+""", unsafe_allow_html=True)
 
-# File Upload
-uploaded_file = st.file_uploader("input Or upload a CSV/TXT file with URLs", type=['csv', 'txt'])
+url_input = st.text_input("Enter a URL for prediction", "")
+uploaded_file = st.file_uploader("Or upload a CSV/TXT file with URLs", type=['csv', 'txt'])
 
-# Process Single URL
-if st.button(" Predict for Single URL") and url_input:
-    pred, conf, plot_buf = explain_url(url_input)
-    log_result(url_input, pred, conf)
+# Single Prediction
+if st.button("Predict for Single URL") and url_input:
+    with st.spinner("Analyzing... please wait"):
+        sanitized = sanitize_url(url_input)
+        pred, conf, plot_buf = explain_url(sanitized)
+        log_result(sanitized, pred, conf)
     st.success(f"Prediction: **{pred}** ({conf:.4f})")
-    st.image(plot_buf, caption="SHAP Explanation", use_column_width=True)
-    st.download_button(" Download SHAP Plot", data=plot_buf, file_name=f"shap_{url_input.replace('/', '_')}.png", mime="image/png")
+    st.image(plot_buf, caption="SHAP Explanation", use_container_width=True)
+    st.download_button("Download SHAP Plot", data=plot_buf, file_name=f"shap_{sanitized.replace('/', '_')}.png", mime="image/png")
 
-# Process Batch File
+# Batch Prediction
 if uploaded_file is not None:
-    if st.button(" Predict for All URLs in File"):
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
-            urls = df.iloc[:, 0].dropna().tolist()
-        else:
-            urls = uploaded_file.read().decode("utf-8").splitlines()
+    if st.button("Predict for All URLs in File"):
+        with st.spinner("Processing file... please wait"):
+            if uploaded_file.name.endswith(".csv"):
+                df = pd.read_csv(uploaded_file)
+                urls = df.iloc[:, 0].dropna().tolist()
+            else:
+                urls = uploaded_file.read().decode("utf-8").splitlines()
 
-        results = []
-        for url in urls:
-            pred, conf, _ = explain_url(url)
-            log_result(url, pred, conf)
-            results.append((url, pred, conf))
+            if len(urls) > MAX_URLS:
+                st.error(f"File contains {len(urls)} URLs, but limit is {MAX_URLS}.")
+                st.stop()
 
-        results_df = pd.DataFrame(results, columns=["URL", "Prediction", "Confidence"])
-        st.dataframe(results_df)
+            results = []
+            for url in urls:
+                sanitized = sanitize_url(url)
+                pred, conf, _ = explain_url(sanitized)
+                log_result(sanitized, pred, conf)
+                results.append((sanitized, pred, conf))
 
-        csv = results_df.to_csv(index=False).encode('utf-8')
-        st.download_button(" Download Prediction Results CSV", csv, "predictions.csv", "text/csv")
+            results_df = pd.DataFrame(results, columns=["URL", "Prediction", "Confidence"])
 
-# View Log
-if st.checkbox(" Show Log CSV"):
+            def highlight_prediction(row):
+                if row["Prediction"] == "Phishing":
+                    return ['background-color: #ffe6e6; color: red'] * len(row)
+                elif row["Prediction"] == "Legitimate":
+                    return ['background-color: #e6ffe6; color: green'] * len(row)
+                return [''] * len(row)
+
+            st.dataframe(results_df.style.apply(highlight_prediction, axis=1))
+            csv = results_df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download Prediction Results CSV", csv, "predictions.csv", "text/csv")
+
+# Log Viewer
+if st.checkbox("Show Log CSV"):
     if os.path.exists(LOG_PATH):
         st.dataframe(pd.read_csv(LOG_PATH))
     else:
         st.warning("No logs yet.")
-
