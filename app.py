@@ -19,7 +19,7 @@ from opt_tcn_model import TCNWithAttention
 MODEL_PATH = "tcn_best_model.pt"
 TOKENIZER_PATH = "char2idx.pkl"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "phishing_logs.db")
+DB_PATH = r"C:\Users\drmar\Documents\Capstone Project\phishing-detector-tcn\phishing_logs.db"
 MAX_LEN = 200
 MAX_URLS = 1000
 
@@ -142,7 +142,7 @@ st.title("Real-Time Phishing Detector for Brand Protection")
 
 st.markdown("""
 <div style='background-color:#fff3cd; padding:10px; border-left:5px solid #ffc107;'>
-    <b>Disclaimer:</b> This tool is for <i>educational and demonstration purposes only</i>.
+    <b>Disclaimer:</b> This tool is for educational and demonstration purposes only.
 </div>
 """, unsafe_allow_html=True)
 
