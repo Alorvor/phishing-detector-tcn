@@ -17,7 +17,8 @@ from opt_tcn_model import TCNWithAttention
 # ------------------- Paths & Constants -------------------
 MODEL_PATH = "tcn_best_model.pt"
 TOKENIZER_PATH = "char2idx.pkl"
-DB_PATH = "phishing_logs.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "phishing_logs.db")
 MAX_LEN = 200
 MAX_URLS = 1000
 
@@ -152,17 +153,20 @@ if st.button("Predict for Single URL") and url_input:
     with st.spinner("Analyzing... please wait"):
         sanitized = sanitize_url(url_input)
         pred, conf, plot_buf = explain_url(sanitized)
+        log_to_db(sanitized, pred, conf)
     st.success(f"Prediction: **{pred}** ({conf:.4f})")
     st.image(plot_buf, caption="SHAP Explanation", use_container_width=True)
     st.download_button("Download SHAP Plot", data=plot_buf, file_name=f"shap_{sanitized.replace('/', '_')}.png", mime="image/png")
 
     st.markdown("#### Was this prediction helpful or accurate?")
-    col1, col2 = st.columns(2)
-    with col1:
+    
+
+col1, col2 = st.columns(2)
+with col1:
         if st.button("👍 Yes"):
             log_to_db(sanitized, pred, conf, feedback="yes")
             st.success("Thank you for your feedback!")
-    with col2:
+with col2:
         if st.button("👎 No"):
             log_to_db(sanitized, pred, conf, feedback="no")
             st.info("Thanks! We'll keep improving.")
