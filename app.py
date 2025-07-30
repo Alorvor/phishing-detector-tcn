@@ -6,6 +6,7 @@ import pickle
 import numpy as np
 import pandas as pd
 import os
+import sqlite3
 from io import BytesIO
 from datetime import datetime
 import uuid
@@ -15,9 +16,9 @@ from opt_tcn_model import TCNWithAttention
 # Paths
 MODEL_PATH = "tcn_best_model.pt"
 TOKENIZER_PATH = "char2idx.pkl"
-LOG_PATH = "streamlit_log.csv"
 MAX_LEN = 200
 MAX_URLS = 1000
+DB_PATH = "phishing_logs.db"
 
 # Assign Session ID
 if "session_id" not in st.session_state:
@@ -26,6 +27,43 @@ if "session_id" not in st.session_state:
 # Sanitize input
 def sanitize_url(url):
     return re.sub(r'[\'\";<>{}]', '', url.strip())
+
+# Initialize DB
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            session_id TEXT,
+            url TEXT,
+            prediction TEXT,
+            confidence REAL,
+            feedback TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def log_to_db(url, prediction, confidence, feedback=""):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO logs (timestamp, session_id, url, prediction, confidence, feedback)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        st.session_state["session_id"],
+        url,
+        prediction,
+        confidence,
+        feedback
+    ))
+    conn.commit()
+    conn.close()
+
+init_db()
 
 # Load tokenizer
 if not os.path.exists(TOKENIZER_PATH):
@@ -95,19 +133,6 @@ def explain_url(url):
     buf.seek(0)
     return prediction, confidence, buf
 
-def log_result(url, prediction, confidence):
-    entry = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "session_id": st.session_state["session_id"],
-        "url": url,
-        "prediction": prediction,
-        "confidence": confidence
-    }
-    if not os.path.exists(LOG_PATH):
-        pd.DataFrame([entry]).to_csv(LOG_PATH, index=False)
-    else:
-        pd.concat([pd.read_csv(LOG_PATH), pd.DataFrame([entry])], ignore_index=True).to_csv(LOG_PATH, index=False)
-
 # ------------------- Streamlit UI -------------------
 st.set_page_config(page_title="TCN Phishing Detector", layout="centered")
 st.title("Real-Time Phishing Detector for Brand Protection")
@@ -126,10 +151,20 @@ if st.button("Predict for Single URL") and url_input:
     with st.spinner("Analyzing... please wait"):
         sanitized = sanitize_url(url_input)
         pred, conf, plot_buf = explain_url(sanitized)
-        log_result(sanitized, pred, conf)
     st.success(f"Prediction: **{pred}** ({conf:.4f})")
     st.image(plot_buf, caption="SHAP Explanation", use_container_width=True)
     st.download_button("Download SHAP Plot", data=plot_buf, file_name=f"shap_{sanitized.replace('/', '_')}.png", mime="image/png")
+
+    st.markdown("#### Was this prediction helpful or accurate?")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("👍 Yes"):
+            log_to_db(sanitized, pred, conf, feedback="yes")
+            st.success("Thank you for your feedback!")
+    with col2:
+        if st.button("👎 No"):
+            log_to_db(sanitized, pred, conf, feedback="no")
+            st.info("Thanks! We'll keep improving.")
 
 # Batch Prediction
 if uploaded_file is not None:
@@ -149,7 +184,7 @@ if uploaded_file is not None:
             for url in urls:
                 sanitized = sanitize_url(url)
                 pred, conf, _ = explain_url(sanitized)
-                log_result(sanitized, pred, conf)
+                log_to_db(sanitized, pred, conf)
                 results.append((sanitized, pred, conf))
 
             results_df = pd.DataFrame(results, columns=["URL", "Prediction", "Confidence"])
@@ -166,8 +201,8 @@ if uploaded_file is not None:
             st.download_button("Download Prediction Results CSV", csv, "predictions.csv", "text/csv")
 
 # Log Viewer
-if st.checkbox("Show Log CSV"):
-    if os.path.exists(LOG_PATH):
-        st.dataframe(pd.read_csv(LOG_PATH))
-    else:
-        st.warning("No logs yet.")
+if st.checkbox("Show Logs"):
+    conn = sqlite3.connect(DB_PATH)
+    df_logs = pd.read_sql("SELECT * FROM logs ORDER BY timestamp DESC", conn)
+    conn.close()
+    st.dataframe(df_logs)
